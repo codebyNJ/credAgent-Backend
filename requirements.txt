@@ -1,20 +1,21 @@
 # requirements.txt
-numpy==1.26.2
-aiohttp==3.9.1
-asyncio==3.4.3
+numpy
+aiohttp
+asyncio
 agno
 groq
 newspaper4k
 yfinance
 ddgs
 lxml_html_clean
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-duckduckgo-search==3.9.6
-transformers==4.35.2
-torch==2.1.0
-python-dotenv==1.0.0
-certifi==2023.11.17
-pydantic==2.5.0
+fastapi
+uvicorn
+duckduckgo-search
+transformers
+torch
+python-dotenv
+certifi
+pydantic
+
 
 
