@@ -1,3 +1,4 @@
+# app.py
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -7,18 +8,21 @@ from agno.models.groq import Groq
 from agno.tools.yfinance import YFinanceTools
 from agno.tools.duckduckgo import DuckDuckGoTools
 from agno.tools.newspaper4k import Newspaper4kTools
+from transformers import pipeline
 import logging
 from typing import List, Optional
 import uuid
 from datetime import datetime
+import os
+import certifi
 
-import os,certifi
-os.environ["SSL_CERT_FILE"]= certifi.where()
+# Set up environment
+os.environ["SSL_CERT_FILE"] = certifi.where()
 from dotenv import load_dotenv
 load_dotenv()
 
-GROQ_API_KEY=os.getenv('GROQ_API_KEY')
-PHI_API_KEY=os.getenv('PHI_API_KEY')
+GROQ_API_KEY = os.getenv('GROQ_API_KEY')
+PHI_API_KEY = os.getenv('PHI_API_KEY')
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -29,7 +33,7 @@ app = FastAPI(title="Financial Intelligence API", version="1.0.0")
 # CORS middleware to allow frontend connections
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["*"],  # For production, specify your frontend URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -54,32 +58,84 @@ class Session(BaseModel):
 # In-memory storage for sessions (use a database in production)
 sessions = {}
 
-def classify_intent(query: str) -> str:
+class NLPIntentClassifier:
     """
-    Enhanced keyword-based intent classification
+    NLP-based intent classifier using a pre-trained model
     """
-    query_lower = query.lower()
+    def __init__(self):
+        # Initialize with a financial-specific model
+        try:
+            # Using a model that understands financial context
+            self.classifier = pipeline(
+                "text-classification", 
+                model="cardiffnlp/twitter-roberta-base-sentiment-latest",
+                top_k=3
+            )
+        except Exception as e:
+            print(f"Error loading NLP model: {e}")
+            self.classifier = None
     
-    # Credit score intent
-    credit_terms = ["credit", "risk", "default", "rating", "score", "worthiness", 
-                   "debt", "leverage", "solvency", "bankruptcy", "liquidity"]
-    if any(term in query_lower for term in credit_terms):
-        return "credit_score"
+    def classify_intent(self, query: str) -> str:
+        """
+        Classify user intent using NLP model with fallback to keywords
+        """
+        # Try NLP classification first
+        if self.classifier:
+            try:
+                results = self.classifier(query)
+                
+                # Extract labels and scores
+                labels = [result['label'] for result in results]
+                scores = [result['score'] for result in results]
+                
+                logger.info(f"NLP Classification Results: {list(zip(labels, scores))}")
+                
+                # Map model outputs to our intent categories
+                query_lower = query.lower()
+                
+                # Check for credit-related terms (highest priority)
+                if any(term in query_lower for term in ["credit", "risk", "default", "rating", "score", "worthiness", "debt", "leverage"]):
+                    return "credit_score"
+                
+                # Check for market analysis terms
+                if any(term in query_lower for term in ["stock", "market", "price", "analysis", "pe ratio", "eps", "financial", "earnings"]):
+                    return "market_analysis"
+                
+                # Check for research terms
+                if any(term in query_lower for term in ["research", "trend", "future", "impact", "implication", "report", "study"]):
+                    return "research"
+                
+                # Default based on sentiment if no specific terms found
+                positive_score = sum(score for label, score in zip(labels, scores) if 'positive' in label.lower())
+                negative_score = sum(score for label, score in zip(labels, scores) if 'negative' in label.lower())
+                
+                if negative_score > positive_score:
+                    return "credit_score"  # Negative sentiment often relates to risk/credit
+                else:
+                    return "market_analysis"  # Positive sentiment often relates to investments
+                    
+            except Exception as e:
+                logger.error(f"NLP classification error: {e}, falling back to keywords")
+                return self.keyword_fallback(query)
+        else:
+            return self.keyword_fallback(query)
     
-    # Market analysis intent  
-    market_terms = ["stock", "market", "price", "analysis", "pe ratio", "eps", 
-                   "financial", "earnings", "dividend", "valuation", "investment", 
-                   "invest", "share", "trading", "portfolio"]
-    if any(term in query_lower for term in market_terms):
-        return "market_analysis"
-    
-    # Research intent
-    research_terms = ["research", "trend", "future", "impact", "implication", 
-                     "report", "study", "outlook", "forecast", "predict", "analysis"]
-    if any(term in query_lower for term in research_terms):
-        return "research"
-    
-    return "general"
+    def keyword_fallback(self, query: str) -> str:
+        """
+        Fallback to keyword-based classification if NLP fails
+        """
+        query_lower = query.lower()
+        if any(word in query_lower for word in ["stock", "market", "price", "analysis", "pe ratio", "eps", "financial", "earnings"]):
+            return "market_analysis"
+        elif any(word in query_lower for word in ["research", "trend", "future", "impact", "implication", "report", "study"]):
+            return "research"
+        elif any(word in query_lower for word in ["credit", "risk", "default", "rating", "score", "worthiness", "debt", "leverage"]):
+            return "credit_score"
+        else:
+            return "general"
+
+# Initialize the NLP classifier
+intent_classifier = NLPIntentClassifier()
 
 # Initialize the financial agent
 financial_agent = Agent(
@@ -131,7 +187,7 @@ async def chat_endpoint(request: ChatRequest):
             session_id = request.session_id
         
         # Classify intent
-        intent = classify_intent(request.message)
+        intent = intent_classifier.classify_intent(request.message)
         logger.info(f"Detected intent: {intent} for message: {request.message}")
         
         # Get response from financial agent
